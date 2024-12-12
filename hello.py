@@ -14,6 +14,10 @@ api_uri = os.getenv("API_URI", "")
 # Global message store
 messages = []
 
+def reset_messages():
+    global messages 
+    messages = []
+
 def threaded(fn):
     def wrapper(*args, **kwargs):
         thread = Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
@@ -150,6 +154,7 @@ def process_stream(msg_idx):
 
 @app.route("/")
 def get():
+    reset_messages()
     page = Body(
         Div(
             H1('Teleme Health Assistant', cls="text-3xl font-bold text-gray-800 mb-6"),
