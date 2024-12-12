@@ -4,7 +4,7 @@ import httpx
 from dotenv import load_dotenv
 import asyncio
 
-app = FastHTML(hdrs=(Script(src="https://cdn.tailwindcss.com"),))
+app = FastHTML(hdrs=(Script(src="https://cdn.tailwindcss.com"), MarkdownJS()))
 
 load_dotenv()
 api_uri = os.getenv("API_URI", "")
@@ -76,11 +76,27 @@ def ChatMessage(msg_idx):
             cls="bg-gray-50 p-4 rounded-lg mt-4 shadow-sm"
         )
     
+    # Add markdown and prose styling
+    markdown_styles = """
+        prose prose-sm max-w-none 
+        prose-p:my-1 prose-headings:mb-2 prose-headings:mt-4 
+        prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2
+        prose-pre:bg-gray-800 prose-pre:text-white
+        prose-strong:font-semibold
+        prose-a:text-blue-500 prose-a:underline
+    """ if not is_user else "prose prose-invert prose-sm max-w-none"
+ 
+    # Only add markdown class when message is complete (not generating)
+    content_class = f"marked {markdown_styles}" if not generating else markdown_styles
+    
     return Div(
         Div(
             Div(msg['role'].title(), cls="text-xs text-gray-500 mb-1"),
-            Div(text,
-                cls=f"px-4 py-2 rounded-lg {bg_class} max-w-[80%] break-words"),
+            Div(
+                Div(text, 
+                    cls=content_class),  # Use 'marked' class for FastHTML's MarkdownJS
+                cls=f"px-4 py-2 rounded-lg {bg_class} max-w-[80%] break-words"
+            ),
             status,
             sources,
             cls=f"{align_class} {width_class}"
