@@ -1,14 +1,12 @@
 from fasthtml.common import *
 import json
 import httpx
-from threading import Thread
 from dotenv import load_dotenv
+import asyncio
 
-# Set up the app with TailwindCSS only
 app = FastHTML(hdrs=(Script(src="https://cdn.tailwindcss.com"),))
 
 load_dotenv()
-
 api_uri = os.getenv("API_URI", "")
 
 # Global message store
@@ -17,13 +15,6 @@ messages = []
 def reset_messages():
     global messages 
     messages = []
-
-def threaded(fn):
-    def wrapper(*args, **kwargs):
-        thread = Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
-        thread.start()
-        return thread
-    return wrapper
 
 def ChatMessage(msg_idx):
     if msg_idx >= len(messages):
@@ -110,20 +101,19 @@ def ChatInput():
     )
 
 @app.get("/chat_message/{msg_idx}")
-def get_chat_message(msg_idx: int):
+async def get_chat_message(msg_idx: int):
     return ChatMessage(msg_idx)
 
-@threaded
-def process_stream(msg_idx):
+async def process_message(msg_idx):
     try:
-        with httpx.Client() as client:
-            with client.stream(
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
                 'POST',
                 api_uri,
                 json={'text': messages[msg_idx-1]['content']},
                 timeout=30.0
             ) as response:
-                for line in response.iter_lines():
+                async for line in response.aiter_lines():
                     if not line:
                         continue
                         
@@ -149,6 +139,7 @@ def process_stream(msg_idx):
                         break
                     
     except Exception as e:
+        print(f"Error in process_message: {e}")
         messages[msg_idx]['content'] = f"Error: {str(e)}"
         messages[msg_idx]['generating'] = False
 
@@ -159,7 +150,6 @@ def get():
         Div(
             H1('Teleme Health Assistant', cls="text-3xl font-bold text-gray-800 mb-6"),
             Div(
-                *[ChatMessage(i) for i in range(len(messages))],
                 id="chatlist",
                 cls="h-[calc(100vh-220px)] overflow-y-auto px-4"
             ),
@@ -185,7 +175,7 @@ def get():
     return Title('Teleme Health Assistant'), page
 
 @app.post("/")
-def post(text: str):
+async def post(text: str):
     user_idx = len(messages)
     assistant_idx = user_idx + 1
     
@@ -200,7 +190,8 @@ def post(text: str):
         "content": ""
     })
     
-    process_stream(assistant_idx)
+    # Create task but don't await it
+    asyncio.create_task(process_message(assistant_idx))
     
     return (
         ChatMessage(user_idx),
