@@ -2,9 +2,14 @@ from fasthtml.common import *
 import json
 import httpx
 from threading import Thread
+from dotenv import load_dotenv
 
 # Set up the app with TailwindCSS only
 app = FastHTML(hdrs=(Script(src="https://cdn.tailwindcss.com"),))
+
+load_dotenv()
+
+api_uri = os.getenv("API_URI", "")
 
 # Global message store
 messages = []
@@ -110,7 +115,7 @@ def process_stream(msg_idx):
         with httpx.Client() as client:
             with client.stream(
                 'POST',
-                'http://localhost:8000/query/streaming',
+                api_uri,
                 json={'text': messages[msg_idx-1]['content']},
                 timeout=30.0
             ) as response:
