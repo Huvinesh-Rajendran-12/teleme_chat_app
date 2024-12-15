@@ -320,11 +320,13 @@ async def ws(msg: str, send):
         hx_swap_oob="beforeend",
         id="chatlist"
     ))
+
+    api_uri = os.getenv("API_URI", "")
     
     # Call backend API with proper streaming
     async with httpx.AsyncClient() as client:
         async with client.stream('POST', 
-                               "http://localhost:8000/query/streaming",
+                               api_uri,
                                json={"text": msg, "history": messages}, timeout=30.0) as response:
             await handle_stream_response(response, send, msg_idx)
 
