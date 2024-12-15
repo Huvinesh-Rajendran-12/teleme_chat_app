@@ -3,9 +3,23 @@ from typing import List, Dict, Any, Tuple
 from config.settings import settings
 from qdrant_client import QdrantClient
 import dashscope
+from http import HTTPStatus
 
 
 client = QdrantClient(url=settings.QDRANT_URL)
+
+
+dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
+
+def embed_with_str(query: str):
+    resp = dashscope.TextEmbedding.call(
+        model=dashscope.TextEmbedding.Models.text_embedding_v3,
+        api_key=settings.DASHSCOPE_API_KEY,
+        input=query)
+    if resp.status_code == HTTPStatus.OK:
+        return resp.output['embeddings'][0]['embedding']
+    else:
+        print(resp)
 
 async def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
     """
@@ -19,7 +33,7 @@ async def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
         2. String joining all relevant information from results
     """
 
-    embed = emb_model.encode(sentences=query)
+    embed = embed_with_str(query)
     results = client.query_points(
         collection_name="knowledge_base_collection",
         query=embed,
@@ -57,7 +71,7 @@ async def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
         1. List of formatted results with doctor information
         2. String joining all relevant information from results
     """
-    embed = emb_model.encode(sentences=query)
+    embed = embed_with_str(query)
     results = client.query_points(
         collection_name="doctor_collection",
         query=embed,
