@@ -2,14 +2,19 @@ from fasthtml.common import *
 import json
 import httpx
 from datetime import datetime
+import asyncio
 
-# Set up the app with Tailwind only
-app = FastHTML(hdrs=(Script(src="https://cdn.tailwindcss.com"), MarkdownJS()), exts='ws')
+# Set up the app with Tailwind and DaisyUI
+app = FastHTML(hdrs=(
+    Script(src="https://cdn.tailwindcss.com"),
+    Link(rel="stylesheet", href="https://cdn.jsdelivr.net/npm/daisyui@4.11.1/dist/full.min.css"),
+    MarkdownJS()
+), exts='ws')
 
 # Store messages, current sources, and history
 messages = []
 current_sources = {"knowledge_base": [], "doctors": []}
-search_history = []  # List to store past searches with timestamps
+search_history = []
 
 def format_historical_source(source, timestamp):
     """Format a historical source result"""
@@ -144,31 +149,37 @@ def get():
     return HistoryPanel()
 
 def ChatMessage(msg_idx, **kwargs):
-    """Render a chat message"""
+    """Render a chat message with polling if still generating"""
     msg = messages[msg_idx]
     is_user = msg['role'] == 'user'
-    align_cls = "ml-auto" if is_user else "mr-auto"
-    bg_cls = "bg-blue-600 text-white" if is_user else "bg-white text-gray-800"
-
-    # Add markdown class and prose styling for better markdown formatting
-    content_cls = f"px-4 py-3 rounded-lg {bg_cls} shadow-sm markdown prose prose-sm max-w-none"
-    # Add light/dark specific styles for markdown content
-    if is_user:
-        content_cls += " prose-invert" # Light text for dark background
-    else:
-        content_cls += " prose-gray"  # Dark text for light background
+    generating = 'generating' in msg and msg['generating']
+    
+    # Add polling attributes if message is still generating
+    poll_attrs = {
+        "hx_trigger": "every 0.1s",
+        "hx_swap": "outerHTML",
+        "hx_get": f"/chat_message/{msg_idx}"
+    } if generating else {}
+    
+    align_cls = "chat-end" if is_user else "chat-start"
+    bubble_cls = "chat-bubble-primary" if is_user else "chat-bubble-secondary"
     
     return Div(
-        Div(
-            P(msg['content'],
-              id=f"chat-content-{msg_idx}",
-              cls=content_cls),
-            cls=f"max-w-[80%] {align_cls}"
-        ),
+        Div(msg['role'], cls="chat-header"),
+        Div(msg['content'] if msg['content'] else "...",
+            cls=f"chat-bubble {bubble_cls} markdown prose"),
         id=f"chat-message-{msg_idx}",
-        cls="mb-4",
+        cls=f"chat {align_cls}",
+        **poll_attrs,
         **kwargs
     )
+
+@app.get("/chat_message/{msg_idx}")
+def get_chat_message(msg_idx: int):
+    """Route that gets polled while streaming"""
+    if msg_idx >= len(messages):
+        return ""
+    return ChatMessage(msg_idx)
 
 def ChatInput():
     """Render the chat input field"""
@@ -198,8 +209,7 @@ def get():
         Div(
             # Header
             Div(
-                H1('Health Assistant', 
-                   cls="text-3xl font-bold text-gray-800"),
+                H1('Health Assistant', cls="text-3xl font-bold"),
                 P("Ask questions about health topics or find suitable doctors", 
                   cls="text-gray-600 mt-1"),
                 cls="text-center mb-8 pt-8"
@@ -208,20 +218,18 @@ def get():
             Div(
                 # Chat section
                 Div(
-                    Div(*[ChatMessage(msg_idx) for msg_idx, msg in enumerate(messages)],
+                    Div(*[ChatMessage(i) for i in range(len(messages))],
                         id="chatlist",
                         cls="h-[70vh] overflow-y-auto px-4 py-6"),
-                    LoadingIndicator(),
                     Form(
                         Div(
                             ChatInput(),
-                            Button("Send", 
-                                  cls="absolute right-3 top-1/2 transform -translate-y-1/2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200"),
+                            Button("Send", cls="btn btn-primary"),
                             cls="relative"
                         ),
-                        ws_send=True,
-                        hx_ext="ws",
-                        ws_connect="/wscon",
+                        hx_post="/send",
+                        hx_target="#chatlist",
+                        hx_swap="beforeend",
                         cls="px-4 mb-6"
                     ),
                     cls="bg-gray-100 rounded-lg shadow-lg"
@@ -239,96 +247,64 @@ def get():
     )
     return Title('Health Assistant'), page
 
-async def handle_stream_response(response_stream, send, msg_idx):
-    """Handle streaming response from backend"""
-    action_status = None
-    async for line in response_stream.aiter_lines():
-        if not line.strip():
-            continue
-        
-        data = json.loads(line)
-        
-        if data["type"] == "action":
-            if action_status != data["status"]:
-                action_status = data["status"]
-                await send(Div(
-                    Div(cls="w-2 h-2 bg-blue-600 rounded-full animate-bounce"),
-                    Div(cls="w-2 h-2 bg-blue-600 rounded-full animate-bounce delay-100"),
-                    Div(cls="w-2 h-2 bg-blue-600 rounded-full animate-bounce delay-200"),
-                    id="loading-indicator",
-                    cls="flex justify-center items-center space-x-2 py-4"
-                ))
-        
-        elif data["type"] == "sources":
-            if data["fn_name"] == "search_knowledge_base":
-                current_sources["knowledge_base"] = data["sources"]
-                # Add to history with timestamp
-                search_history.append((data["sources"], datetime.now()))
-            else:
-                current_sources["doctors"] = data["sources"]
-            await send(Sources())
-        
-        elif data["type"] == "stream":
-            messages[msg_idx]["content"] += data["content"]
-            await send(Span(
-                data["content"],
-                id=f"chat-content-{msg_idx}",
-                hx_swap_oob="beforeend"
-            ))
-        
-        elif data["type"] == "final_answer":
-            messages[msg_idx]["content"] = data["content"]
-            if "sources" in data:
-                if data["sources"]["fn_name"] == "search_knowledge_base":
-                    current_sources["knowledge_base"] = data["sources"]["data"]
-                    # Add to history with timestamp
-                    search_history.append((data["sources"]["data"], datetime.now()))
+@threaded
+def process_stream_response(response_stream, msg_idx):
+    """Process streaming response in a separate thread"""
+    async def process():
+        action_status = None
+        async for line in response_stream.aiter_lines():
+            if not line.strip():
+                continue
+            
+            data = json.loads(line)
+            
+            if data["type"] == "stream":
+                messages[msg_idx]["content"] += data["content"]
+            elif data["type"] == "sources":
+                if data["fn_name"] == "search_knowledge_base":
+                    current_sources["knowledge_base"] = data["sources"]
+                    search_history.append((data["sources"], datetime.now()))
                 else:
-                    current_sources["doctors"] = data["sources"]["data"]
-                await send(Sources())
-            await send(Div("", id="loading-indicator", cls="hidden"))
+                    current_sources["doctors"] = data["sources"]
+            elif data["type"] == "final_answer":
+                messages[msg_idx]["content"] = data["content"]
+                messages[msg_idx]["generating"] = False
+                
+        messages[msg_idx]["generating"] = False
+    
+    asyncio.run(process())
 
-
-@app.ws('/wscon')
-async def ws(msg: str, send):
-    """WebSocket connection handler"""
+@app.post("/send")
+async def post(msg: str):
+    """Handle message submission"""
     # Add user message
     messages.append({"role": "user", "content": msg.rstrip()})
-    await send(Div(
-        ChatMessage(len(messages)-1),
-        hx_swap_oob="beforeend",
-        id="chatlist"
-    ))
+    user_msg_idx = len(messages) - 1
     
-    # Clear input
-    await send(ChatInput())
+    # Add initial assistant message
+    messages.append({
+        "role": "assistant",
+        "content": "",
+        "generating": True
+    })
+    assistant_msg_idx = len(messages) - 1
     
-    # Show loading indicator
-    await send(Div(
-        Div(cls="w-2 h-2 bg-blue-600 rounded-full animate-bounce"),
-        Div(cls="w-2 h-2 bg-blue-600 rounded-full animate-bounce delay-100"),
-        Div(cls="w-2 h-2 bg-blue-600 rounded-full animate-bounce delay-200"),
-        id="loading-indicator",
-        cls="flex justify-center items-center space-x-2 py-4"
-    ))
-    
-    # Add empty assistant message
-    messages.append({"role": "assistant", "content": ""})
-    msg_idx = len(messages) - 1
-    await send(Div(
-        ChatMessage(msg_idx),
-        hx_swap_oob="beforeend",
-        id="chatlist"
-    ))
-
+    # Start processing in background
     api_uri = os.getenv("API_URI", "")
-    
-    # Call backend API with proper streaming
     async with httpx.AsyncClient() as client:
-        async with client.stream('POST', 
-                               api_uri,
-                               json={"text": msg, "history": messages}, timeout=30.0) as response:
-            await handle_stream_response(response, send, msg_idx)
+        response = await client.stream(
+            'POST',
+            api_uri,
+            json={"text": msg, "history": messages},
+            timeout=30.0
+        )
+        process_stream_response(response, assistant_msg_idx)
+    
+    return (
+        ChatMessage(user_msg_idx),
+        ChatMessage(assistant_msg_idx),
+        ChatInput()
+    )
 
 if __name__ == "__main__":
     serve()
