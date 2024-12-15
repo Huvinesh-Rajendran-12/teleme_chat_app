@@ -3,10 +3,9 @@ import json
 import httpx
 from datetime import datetime
 
-# Set up the app with Tailwind and DaisyUI
+# Set up the app with Tailwind 
 app = FastHTML(hdrs=(
     Script(src="https://cdn.tailwindcss.com"),
-    Link(rel="stylesheet", href="https://cdn.jsdelivr.net/npm/daisyui@4.11.1/dist/full.min.css"),
     MarkdownJS()
 ), exts='ws')
 
@@ -113,11 +112,9 @@ def Sources():
         # Content area
         Div(
             H2("Knowledge Base Results", cls="text-xl font-bold text-gray-800 mb-4") if kb_sources else None,
-            Div(*kb_sources,
-                cls="space-y-4 mb-8"),
+            Div(*kb_sources, cls="space-y-4 mb-8"),
             H2("Recommended Doctors", cls="text-xl font-bold text-gray-800 mb-4") if doc_sources else None,
-            Div(*doc_sources,
-                cls="space-y-4"),
+            Div(*doc_sources, cls="space-y-4"),
             id="sources-content",
             cls="space-y-6"
         ),
@@ -160,15 +157,19 @@ def ChatMessage(msg_idx, **kwargs):
         "hx_get": f"/chat_message/{msg_idx}"
     } if generating else {}
     
-    align_cls = "chat-end" if is_user else "chat-start"
-    bubble_cls = "chat-bubble-primary" if is_user else "chat-bubble-secondary"
+    # Style classes based on message role
+    container_cls = "flex " + ("justify-end" if is_user else "justify-start")
+    bubble_cls = ("bg-blue-600 text-white" if is_user else "bg-gray-200 text-gray-800") + " rounded-lg px-4 py-2 max-w-[70%]"
     
     return Div(
-        Div(msg['role'], cls="chat-header"),
-        Div(msg['content'] if msg['content'] else "...",
-            cls=f"chat-bubble {bubble_cls} markdown prose"),
+        Div(
+            P(msg['role'], cls="text-xs text-gray-500 mb-1"),
+            Div(msg['content'] if msg['content'] else "...",
+                cls=f"{bubble_cls} markdown prose"),
+            cls="flex flex-col"
+        ),
         id=f"chat-message-{msg_idx}",
-        cls=f"chat {align_cls}",
+        cls=container_cls,
         **poll_attrs,
         **kwargs
     )
@@ -208,7 +209,7 @@ def get():
         Div(
             # Header
             Div(
-                H1('Health Assistant', cls="text-3xl font-bold"),
+                H1('Health Assistant', cls="text-3xl font-bold text-gray-800"),
                 P("Ask questions about health topics or find suitable doctors", 
                   cls="text-gray-600 mt-1"),
                 cls="text-center mb-8 pt-8"
@@ -220,10 +221,12 @@ def get():
                     Div(*[ChatMessage(i) for i in range(len(messages))],
                         id="chatlist",
                         cls="h-[70vh] overflow-y-auto px-4 py-6"),
+                    LoadingIndicator(),
                     Form(
                         Div(
                             ChatInput(),
-                            Button("Send", cls="btn btn-primary"),
+                            Button("Send", 
+                                  cls="absolute right-3 top-1/2 transform -translate-y-1/2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200"),
                             cls="relative"
                         ),
                         hx_post="/send",
