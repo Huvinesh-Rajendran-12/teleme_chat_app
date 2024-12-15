@@ -2,7 +2,6 @@ from fasthtml.common import *
 import json
 import httpx
 from datetime import datetime
-import asyncio
 
 # Set up the app with Tailwind and DaisyUI
 app = FastHTML(hdrs=(
@@ -247,12 +246,11 @@ def get():
     )
     return Title('Health Assistant'), page
 
-@threaded
 def process_stream_response(response_stream, msg_idx):
     """Process streaming response in a separate thread"""
-    async def process():
+    def process():
         action_status = None
-        async for line in response_stream.aiter_lines():
+        for line in response_stream.iter_lines():
             if not line.strip():
                 continue
             
@@ -272,10 +270,10 @@ def process_stream_response(response_stream, msg_idx):
                 
         messages[msg_idx]["generating"] = False
     
-    asyncio.run(process())
+    process()
 
 @app.post("/send")
-async def post(msg: str):
+def post(msg: str):
     """Handle message submission"""
     # Add user message
     messages.append({"role": "user", "content": msg.rstrip()})
@@ -291,14 +289,14 @@ async def post(msg: str):
     
     # Start processing in background
     api_uri = os.getenv("API_URI", "")
-    async with httpx.AsyncClient() as client:
-        response = await client.stream(
-            'POST',
-            api_uri,
-            json={"text": msg, "history": messages},
-            timeout=30.0
-        )
-        process_stream_response(response, assistant_msg_idx)
+    client = httpx.Client()
+    response = client.stream(
+        'POST',
+        api_uri,
+        json={"text": msg, "history": messages},
+        timeout=30.0
+    )
+    process_stream_response(response, assistant_msg_idx)
     
     return (
         ChatMessage(user_msg_idx),
