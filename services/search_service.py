@@ -21,7 +21,7 @@ def embed_with_str(query: str):
     else:
         print(resp)
 
-async def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
+def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
     """
     Search the knowledge base for relevant information.
 
@@ -63,7 +63,7 @@ async def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
     combined_text = "\n".join(combined_text_parts)
     return formatted_results, combined_text
 
-async def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
+def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
     """
     Search for doctors based on query.
     Returns:
