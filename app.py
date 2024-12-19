@@ -22,6 +22,8 @@ messages = [
     }
 ]
 
+current_message_idx = 0
+
 tools = [
     # Tool 1: obtain the current time
     {
@@ -56,33 +58,28 @@ tools = [
     }
 ]
 
-def SourcesPanel(msg_idx):
-    """Render the sources panel with tabs"""
-    if msg_idx >= 0 and msg_idx < len(messages):
-        msg = messages[msg_idx]
-        knowledge_sources = msg.get('knowledge_sources', [])
-        doctor_sources = msg.get('doctor_sources', [])
-    else:
-        knowledge_sources = []
-        doctor_sources = []
-    
+def SourcesPanel():
+    """
+    Render the sources panel with tabs
+    Uses HTMX to track current message
+    """
     return Div(
         # Tabs
         Div(
             Button(
                 "Medical Experts",
-                cls="px-4 py-2 font-medium rounded-t-lg focus:outline-none",
+                cls="px-4 py-2 font-medium rounded-t-lg focus:outline-none bg-white text-blue-600",
                 id="tab-doctors",
-                hx_get=f"/sources/{msg_idx}/doctors",
+                hx_get="/sources/doctors",
                 hx_target="#tab-content",
                 _="on click add bg-white text-blue-600 remove bg-gray-100 text-gray-600 to me "
                    "add bg-gray-100 text-gray-600 remove bg-white text-blue-600 to #tab-knowledge"
             ),
             Button(
-                "Knowledge Base",
-                cls="px-4 py-2 font-medium rounded-t-lg focus:outline-none",
+                "Knowledge Base", 
+                cls="px-4 py-2 font-medium rounded-t-lg focus:outline-none bg-gray-100 text-gray-600",
                 id="tab-knowledge",
-                hx_get=f"/sources/{msg_idx}/knowledge",
+                hx_get="/sources/knowledge",
                 hx_target="#tab-content",
                 _="on click add bg-white text-blue-600 remove bg-gray-100 text-gray-600 to me "
                    "add bg-gray-100 text-gray-600 remove bg-white text-blue-600 to #tab-doctors"
@@ -91,15 +88,17 @@ def SourcesPanel(msg_idx):
         ),
         # Tab content
         Div(
+            P("Select a message to view sources", cls="text-gray-500 text-center p-4"),
             id="tab-content",
             cls="p-4 bg-white flex-grow overflow-y-auto"
         ),
         id="sources-panel",
-        cls="flex flex-col h-full"
+        cls="flex flex-col h-full",
+        hx_trigger="messageSelected from:body"
     )
 
 def ChatMessage(msg_idx):
-    """Render a chat message"""
+    """Render a chat message with click handler to update sources"""
     if msg_idx >= len(messages):
         return ""
     
@@ -117,31 +116,17 @@ def ChatMessage(msg_idx):
         "hx_get": f"/chat_message/{msg_idx}"
     } if generating else {}
     
-    # Status message
-    status = ""
-    if msg.get('status'):
-        status = Div(
-            msg['status'],
-            cls="text-sm text-gray-500 mt-1"
-        )
-    
     return Div(
         Div(
             Div(msg['role'].title(), cls="text-xs text-gray-500 mb-1"),
             Div(text,
-                cls=f"px-4 py-2 rounded-lg {bg_class} {is_marked} max-w-[80%] break-words"),
-            status,
+                cls=f"px-4 py-2 rounded-lg {bg_class} {is_marked} max-w-[80%] break-words cursor-pointer",
+                _=f"on click trigger messageSelected with {{msgIdx: {msg_idx}}}"),
             cls=f"{align_class} max-w-[80%]"
         ),
         cls="mb-4",
         id=f"chat-message-{msg_idx}",
-        **stream_args,
-        _=f"""
-        on load
-            if {msg_idx} > 0
-                send updateSources({msg_idx}) to #sources-panel
-        end
-        """
+        **stream_args
     )
 
 def ChatInput():
@@ -159,12 +144,37 @@ def ChatInput():
 def get_chat_message(msg_idx: int):
     return ChatMessage(msg_idx)
 
-@app.get("/sources/{msg_idx}/doctors")
-def get_doctor_sources(msg_idx: int):
-    if msg_idx >= len(messages):
-        return ""
+@app.get("/sources/knowledge")
+def get_knowledge_sources():
+    """Get knowledge sources for current message"""
+    global current_message_idx
+    if current_message_idx >= len(messages):
+        return P("No message selected", cls="text-gray-500 text-center")
     
-    sources = messages[msg_idx].get('doctor_sources', [])
+    sources = messages[current_message_idx].get('knowledge_sources', [])
+    
+    return Div(
+        *(
+            Div(
+                H4(source['title'], cls="font-semibold text-lg"),
+                P(source['content_preview'], cls="mt-1"),
+                A("Source Link",
+                  href=source['source_link'],
+                  cls="inline-block mt-2 text-blue-500 hover:text-blue-700"),
+                cls="mb-4 border-b border-gray-200 pb-4"
+            )
+            for source in sources
+        ) if sources else P("No knowledge base entries found", cls="text-gray-500 text-center")
+    )
+
+@app.get("/sources/doctors")
+def get_doctor_sources():
+    """Get doctor sources for current message"""
+    global current_message_idx
+    if current_message_idx >= len(messages):
+        return P("No message selected", cls="text-gray-500 text-center")
+    
+    sources = messages[current_message_idx].get('doctor_sources', [])
     
     return Div(
         *(
@@ -181,26 +191,12 @@ def get_doctor_sources(msg_idx: int):
         ) if sources else P("No medical experts found", cls="text-gray-500 text-center")
     )
 
-@app.get("/sources/{msg_idx}/knowledge")
-def get_knowledge_sources(msg_idx: int):
-    if msg_idx >= len(messages):
-        return ""
-    
-    sources = messages[msg_idx].get('knowledge_sources', [])
-    
-    return Div(
-        *(
-            Div(
-                H4(source['title'], cls="font-semibold text-lg"),
-                P(source['content_preview'], cls="mt-1"),
-                A("Source Link",
-                  href=source['source_link'],
-                  cls="inline-block mt-2 text-blue-500 hover:text-blue-700"),
-                cls="mb-4 border-b border-gray-200 pb-4"
-            )
-            for source in sources
-        ) if sources else P("No knowledge base entries found", cls="text-gray-500 text-center")
-    )
+@app.get("/update_current_message/{msg_idx}")
+def update_current_message(msg_idx: int):
+    """Update the current message index"""
+    global current_message_idx
+    current_message_idx = msg_idx
+    return ""
 
 def process_sources(response, msg_idx):
     """Process sources from tools and update message"""
@@ -245,7 +241,26 @@ def process_stream(msg_idx):
 @app.route("/")
 def get():
     """Render the main page"""
+    global current_message_idx
+    current_message_idx = 0
+    
+    # Reset messages
+    messages.clear()
+    messages.append({
+        "role": "system",
+        "content": settings.SYSTEM_PROMPT
+    })
+    
     page = Body(
+        # Add hyperscript for message selection
+        Script("""
+        on messageSelected
+            set msgIdx to event.detail.msgIdx
+            fetch `/update_current_message/${msgIdx}`
+            trigger refreshSources
+        end
+        """, type="text/hyperscript"),
+        
         Div(
             H1('AI Health Assistant', cls="text-3xl font-bold text-gray-800 mb-6 px-4"),
             # Main content area with split layout
@@ -274,11 +289,11 @@ def get():
                     cls="flex-1"
                 ),
                 # Sources panel
-                Div(
-                    SourcesPanel(-1),
-                    cls="w-96 bg-gray-50 border-l border-gray-200"
-                ),
-                cls="flex flex-row flex-1"
+                # Div(
+                #     SourcesPanel(),
+                #     cls="w-96 bg-gray-50 border-l border-gray-200"
+                # ),
+                # cls="flex flex-row flex-1"
             ),
             cls="max-w-7xl mx-auto h-screen flex flex-col"
         ),
