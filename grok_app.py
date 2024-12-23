@@ -26,7 +26,12 @@ async_client = AsyncOpenAI(
     base_url=settings.XAI_BASE_URL
 )
 
-messages = []
+messages = [
+    {
+        "role": "system",
+        "content": settings.SYSTEM_PROMPT
+    }
+]
 
 # Tool definitions
 tools_definition = [
@@ -120,7 +125,7 @@ def format_sources(sources):
         else:  # Knowledge base source
             formatted_sources.append(
                 Div(
-                    H4(source['title'], cls="font-semibold text-lg"),
+                    H4(source['title'].title(), cls="font-semibold text-lg"),
                     P(source['content_preview'], cls="mt-1"),
                     A("Source Link",
                       href=source['source_link'],
@@ -264,13 +269,25 @@ async def process_tool_call(tool_call):
     print(f"Processing tool {fn_name} with args: {fn_args}")
     
     result = tool_maps[fn_name](**fn_args)
- 
-    messages.append({
-        "role": "tool",
-        "content": json.dumps(result),
-        "tool_name": fn_name,
-        "tool_call_id": tool_call.id
-    })
+
+    print(len(result))
+
+    if len(result) > 0:
+        messages.append({
+            "role": "tool",
+            "content": json.dumps(result),
+            "tool_name": fn_name,
+            "tool_call_id": tool_call.id,
+            "result_length": len(result)
+        })
+    else:
+        messages.append({
+            "role": "tool",
+            "content": f"No result for {fn_name} with argument {fn_args}",
+            "tool_name": fn_name,
+            "tool_call_id": tool_call.id,
+            "result_length": 0 
+        })
 
 @app.ws('/ws')
 async def ws(msg: str, send):
@@ -318,6 +335,7 @@ async def ws(msg: str, send):
         ))
 
         async for chunk in response:
+            print(chunk)
             if chunk.choices[0].delta.content is not None:
                 messages[assistant_msg_idx]['content'] += chunk.choices[0].delta.content
                 # Update the current message
@@ -328,19 +346,23 @@ async def ws(msg: str, send):
                 ))
 
             if chunk.choices[0].delta.tool_calls:
+                print(chunk.choices[0].delta.tool_calls)
                 for tool_call in chunk.choices[0].delta.tool_calls:
+                    print('tool call')
                     await process_tool_call(tool_call)
 
-                    if messages[-1]['role'] == 'tool':
+                    if messages[-1]['role'] == 'tool' and messages[-1]['result_length'] > 0:
                         formatted_sources = format_sources(messages[-1]['content'])
-                        await send(Div(
-                            *formatted_sources,
-                            id="sources-panel",
-                            hx_swap_oob="innerHTML"
-                        ))
+                        if len(formatted_sources) > 0:
+                            await send(Div(
+                                *formatted_sources,
+                                id="sources-panel",
+                                hx_swap_oob="innerHTML"
+                            ))
 
         # If last message was a tool response, get another completion
         if messages[-1]['role'] == 'tool':
+            print(messages[-1]['content'])
             messages.append({
                 "role": "assistant",
                 "content": ""

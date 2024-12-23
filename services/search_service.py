@@ -21,7 +21,7 @@ def embed_with_str(query: str):
     else:
         print(resp)
 
-def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
+def search_knowledge_base(query: str) -> List[Dict[str, Any]]:
     """
     Search the knowledge base for relevant information.
 
@@ -61,10 +61,12 @@ def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
         #     f"Source: {result.payload['source_link']}\n"
         # )
 
+    print('results', formatted_results)
+
     # combined_text = "\n".join(combined_text_parts)
     return formatted_results
 
-def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
+def search_doctors(query: str) -> List[Dict[str, Any]]:
     """
     Search for doctors based on query.
     Returns:
@@ -78,7 +80,7 @@ def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
         query=embed,
         with_payload=True,
         limit=3,
-        score_threshold=0.5,
+        score_threshold=0.9,
     )
 
     formatted_results = []
