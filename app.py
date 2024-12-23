@@ -6,7 +6,14 @@ import json
 from threading import Thread
 
 # Set up the app with TailwindCSS
-app = FastHTML(hdrs=(Script(src="https://cdn.tailwindcss.com"),MarkdownJS()))
+app = FastHTML(
+    hdrs=(
+        Script(src="https://cdn.tailwindcss.com"),
+        MarkdownJS(),
+        Script(src="static/js/sources.js")
+    ), 
+    exts='ws'
+    )
 
 # Initialize OpenAI client
 client = OpenAI(
@@ -200,6 +207,7 @@ def update_current_message(msg_idx: int):
 
 def process_sources(response, msg_idx):
     """Process sources from tools and update message"""
+    print('response', response)
     if 'tool_calls' in response:
         for tool_call in response['tool_calls']:
             name = tool_call['function']['name']
@@ -224,13 +232,17 @@ def process_stream(msg_idx):
         
         current_msg = ""
         for chunk in response:
+            print(chunk)
+            if chunk.choices[0].delta.tool_calls:
+                print(chunk.choices[0].delta.tool_calls)
+                process_sources(chunk.choices[0].delta.model_dump(), msg_idx)
+
             if chunk.choices[0].delta.content:
+                print(chunk.choices[0].delta.content, end="", flush=True)
                 current_msg += chunk.choices[0].delta.content
                 messages[msg_idx]['content'] = current_msg
             
             # Process tool calls if present
-            if chunk.choices[0].delta.tool_calls:
-                process_sources(chunk.choices[0].delta.model_dump(), msg_idx)
                 
         messages[msg_idx]['generating'] = False
         

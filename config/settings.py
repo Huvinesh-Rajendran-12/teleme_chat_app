@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # CACHING settings
     ENABLE_CACHE: bool = os.getenv("ENABLE_CACHE", "True").lower() == "true"
 
+    #xAI settings 
+    XAI_API_KEY: str = os.getenv("XAI_API_KEY", "")
+    XAI_BASE_URL: str = os.getenv("XAI_BASE_URL", "")
+
     @property
     def SYSTEM_PROMPT(self) -> str:
         return """

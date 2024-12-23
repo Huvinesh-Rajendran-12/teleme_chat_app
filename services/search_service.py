@@ -48,20 +48,21 @@ def search_knowledge_base(query: str) -> Tuple[List[Dict[str, Any]], str]:
         content_preview = result.payload["content"][:200] + "..." if len(result.payload["content"]) > 200 else result.payload["content"]
         formatted_results.append({
             "title": result.payload["title"],
+            "content": result.payload["content"],
             "content_preview": content_preview,
             "source_link": result.payload["source_link"],
             "relevance_score": round(result.score, 3)
         })
 
-        # Add to combined text
-        combined_text_parts.append(
-            f"Title: {result.payload['title']}\n"
-            f"Content: {result.payload['content']}\n"
-            f"Source: {result.payload['source_link']}\n"
-        )
+        # # Add to combined text
+        # combined_text_parts.append(
+        #     f"Title: {result.payload['title']}\n"
+        #     f"Content: {result.payload['content']}\n"
+        #     f"Source: {result.payload['source_link']}\n"
+        # )
 
-    combined_text = "\n".join(combined_text_parts)
-    return formatted_results, combined_text
+    # combined_text = "\n".join(combined_text_parts)
+    return formatted_results
 
 def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
     """
@@ -95,10 +96,10 @@ def search_doctors(query: str) -> Tuple[List[Dict[str, Any]], str]:
         })
 
         # Add to combined text
-        combined_text_parts.append(
-            f"Specialization: {result.payload['doctor_field']}\n"
-            f"Description: {result.payload['doctor_description']}\n"
-        )
+        # combined_text_parts.append(
+        #     f"Specialization: {result.payload['doctor_field']}\n"
+        #     f"Description: {result.payload['doctor_description']}\n"
+        # )
 
-    combined_text = "\n".join(combined_text_parts)
-    return formatted_results, combined_text
+    # combined_text = "\n".join(combined_text_parts)
+    return formatted_results

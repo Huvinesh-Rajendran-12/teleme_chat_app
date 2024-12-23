@@ -9,7 +9,7 @@ import sys
 
 load_dotenv()
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(PROJECT_ROOT)
 
 load_dotenv()
@@ -23,7 +23,9 @@ except ModuleNotFoundError:
     @dataclass
     class Settings:
         DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
-        DASHSCOPE_HTTP_BASE_URL: str = os.getenv("DASHSCOPE_HTTP_BASE_URL", "https://dashscope-intl.aliyuncs.com/api/v1")
+        DASHSCOPE_HTTP_BASE_URL: str = os.getenv(
+            "DASHSCOPE_HTTP_BASE_URL", "https://dashscope-intl.aliyuncs.com/api/v1"
+        )
         QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
         NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
         NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "")
@@ -31,18 +33,20 @@ except ModuleNotFoundError:
 
     settings = Settings()
 
-dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
+dashscope.base_http_api_url = "https://dashscope-intl.aliyuncs.com/api/v1"
+
 
 def embed_with_str(input):
     resp = dashscope.TextEmbedding.call(
         model=dashscope.TextEmbedding.Models.text_embedding_v3,
         api_key=settings.DASHSCOPE_API_KEY,
-        input=input
+        input=input,
     )
     if resp.status_code == HTTPStatus.OK:
-        return resp.output['embeddings'][0]['embedding']
+        return resp.output["embeddings"][0]["embedding"]
     else:
         print(resp)
+
 
 data: Dict[str, List[str | bool]] = {
     "doctor_name": [
@@ -61,13 +65,8 @@ data: Dict[str, List[str | bool]] = {
         "https://www.pantai.com.my/kuala-lumpur/ms/appointment/azlina-firzah-bt-abd-aziz",
         "https://www.pantai.com.my/kuala-lumpur/appointment/vijay-ananda-paramasvaran",
     ],
-    "availability": [
-        True,
-        True,
-        False
-    ]
+    "availability": [True, True, False],
 }
-
 
 
 client = QdrantClient(url="http://localhost:6333")
@@ -77,19 +76,26 @@ is_collection = client.collection_exists(collection_name="doctor_collection")
 if not is_collection:
     client.create_collection(
         collection_name="doctor_collection",
-        vectors_config=VectorParams(size=1024, distance=Distance.COSINE)
+        vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
     )
 
 operation_info = client.upsert(
     collection_name="doctor_collection",
     points=[
-        PointStruct(id=idx, vector=embed_with_str(data['doctor_description'][idx]), payload={
-            "doctor_name": data["doctor_name"][idx], "doctor_field": data["doctor_field"][idx],
-            "doctor_description": data["doctor_description"][idx], "availability": data["availability"][idx],
-            "appointment_link": data["appointment_link"][idx]
-        }) for idx in range(len(data['doctor_description']))
+        PointStruct(
+            id=idx,
+            vector=embed_with_str(data["doctor_description"][idx]),
+            payload={
+                "doctor_name": data["doctor_name"][idx],
+                "doctor_field": data["doctor_field"][idx],
+                "doctor_description": data["doctor_description"][idx],
+                "availability": data["availability"][idx],
+                "appointment_link": data["appointment_link"][idx],
+            },
+        )
+        for idx in range(len(data["doctor_description"]))
     ],
-    wait=True
+    wait=True,
 )
 
 print(operation_info)

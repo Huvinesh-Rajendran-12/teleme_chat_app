@@ -1,69 +1,34 @@
 from fasthtml.common import *
-from openai import OpenAI
-from services.search_service import search_knowledge_base, search_doctors
-from config.settings import settings
+from openai import OpenAI, AsyncOpenAI
 import json
 from threading import Thread
+from config.settings import settings
+from services.search_service import search_doctors, search_knowledge_base
 
-# App initialization remains the same...
-app = FastHTML(hdrs=(
-    Script(src="https://cdn.tailwindcss.com"),
-    Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
-    MarkdownJS(),
-    Script("""
-        // Configure marked options
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
-            sanitize: true
-        });
-        
-        // Helper function to render markdown
-        function renderMarkdown() {
-            document.querySelectorAll('[data-markdown="true"]').forEach(el => {
-                el.innerHTML = marked.parse(el.textContent);
-            });
-        }
-        
-        // Helper function for tab handling
-        function handleTabClick(event) {
-            const button = event.target;
-            if (!button.classList.contains('tab-button')) return;
-            
-            // Remove active state from all tabs
-            document.querySelectorAll('.tab-button').forEach(tab => {
-                tab.classList.remove('active', 'text-blue-600', 'border-blue-600');
-                tab.classList.add('text-gray-500');
-            });
-            
-            // Add active state to clicked tab
-            button.classList.add('active', 'text-blue-600', 'border-blue-600');
-            button.classList.remove('text-gray-500');
-        }
-        
-        // Initialize tab click handlers
-        document.addEventListener('htmx:afterSettle', function() {
-            renderMarkdown();
-        });
-    """)
-))
+# Initialize app with required headers
+app, rt = fast_app(
+    pico=False,  # We'll use Tailwind instead
+    exts="ws",
+    hdrs=(
+        Script(src="https://cdn.tailwindcss.com"),
+        MarkdownJS(),
+    )
+)
 
-# Initialize OpenAI client and global state...
+# Initialize OpenAI client and global state
 client = OpenAI(
-    api_key=settings.DASHSCOPE_API_KEY,
-    base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    api_key=settings.XAI_API_KEY,
+    base_url=settings.XAI_BASE_URL
+)  # Configure with environment variables
+
+async_client = AsyncOpenAI(
+    api_key=settings.XAI_API_KEY,
+    base_url=settings.XAI_BASE_URL
 )
 
 messages = []
-global fn_call_in_progress
-fn_call_in_progress = False
-current_sources = {
-    "knowledge_base": [],
-    "doctors": []
-}
 
-# Tools definition remains the same...
-
+# Tool definitions
 tools_definition = [
     {
         "type": "function",
@@ -73,10 +38,7 @@ tools_definition = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The user query, e.g. what is diabetes ?"
-                    },
+                    "query": {"type": "string", "description": "The user query, e.g. what is diabetes ?"},
                 },
                 "required": ["query"]
             }
@@ -86,14 +48,11 @@ tools_definition = [
         "type": "function",
         "function": {
             "name": "search_doctors",
-            "description": "Get the suitalbe doctors based on the user's query.",
+            "description": "Get the suitable doctors based on the user's query.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The user query, e.g. recommend me a doctor for diabetes"
-                    }
+                    "query": {"type": "string", "description": "The user query, e.g. recommend me a doctor for diabetes"},
                 },
                 "required": ["query"]
             }
@@ -101,411 +60,242 @@ tools_definition = [
     }
 ]
 
-tools_map = {
-    "search_knowledge_base": search_knowledge_base,
-    "search_doctors": search_doctors,
+tool_maps = {
+    'search_knowledge_base': search_knowledge_base,
+    'search_doctors': search_doctors
 }
 
-def reset_messages():
-    global messages
-    messages = []
-
-
+# Define component functions
 def ChatMessage(msg_idx):
-    """Render a chat message with markdown support"""
+    """Render a chat message with sources"""
+    if msg_idx >= len(messages):
+        return ""
+    
     msg = messages[msg_idx]
-    text = "..." if msg['content'] == "" else msg['content']
+    text = msg.get('content', '')
     is_user = msg['role'] == 'user'
-    generating = msg.get('generating', False)
     
-    align_cls = "ml-auto" if is_user else "mr-auto"
-    bg_cls = "bg-blue-600" if is_user else "bg-white"
-    text_cls = "text-black" if is_user else "text-gray-800"
-    
-    # Common classes for the message bubble
-    bubble_cls = f"p-4 rounded-2xl shadow-sm {bg_cls} {text_cls} max-w-[80%] whitespace-pre-wrap"
-
-    stream_args = {
-        "hx_trigger": "every 50ms",
-        "hx_swap": "outerHTML",
-        "hx_get": f"/chat_message/{msg_idx}"
-    } if generating else {}
-    
-    if generating:
-        content_div = Div(
-            text,
-            id=f"content-{msg_idx}",
-            cls=bubble_cls
-        )
-    else:
-        content_div = Div(
-            # Use a data attribute to store raw content for markdown
-            text,
-            data_markdown=True,
-            id=f"content-{msg_idx}",
-            cls=f"{bubble_cls} prose prose-sm"
-        )
-
-    if fn_call_in_progress:
-        status = Div(
-            "Retrieving Data...",
-            cls="text-sm text-gray-500 mt-1"
-        )
-        
     return Div(
-        Div(msg['role'].capitalize(), 
-            cls=f"text-sm {text_cls} mb-1"),
-        content_div,
-        status,
-        cls=f"mb-6 {align_cls}",
-        id=f"msg-{msg_idx}",
-        **stream_args,
-        _=f"""
-        on load
-            if {msg_idx} > 0
-                send updateSources({msg_idx}) to #sources-panel 
-        end
-        """
+        Div(
+            Div(msg['role'].title(), cls="text-xs text-gray-500 mb-1"),
+            Div(text,
+                cls=f"px-4 py-2 rounded-lg {'bg-blue-500 text-white' if is_user else 'bg-gray-200 text-gray-800'} max-w-[80%] break-words marked"),
+            cls=f"{'ml-auto' if is_user else 'mr-auto'} max-w-[80%]"
+        ),
+        cls="mb-4",
+        id=f"chat-message-{msg_idx}",
     )
 
 def ChatInput():
-    """Render the chat input field"""
+    """Render chat input field"""
     return Input(
         type="text",
-        name='msg',
-        id='msg-input',
-        placeholder="Ask about health topics or find a doctor...",
-        cls="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent",
-        autofocus=True,
-        hx_swap_oob='true'
+        name="msg",
+        id="chat-input",
+        placeholder="Type your health-related question here...",
+        cls="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+        hx_swap_oob="true"
     )
 
-def SourcesPanel(msg_idx):
-    is_tool = messages[msg_idx].get('role') == 'tool' 
-    if msg_idx >= len(messages) or not is_tool:
-        return Div(
-            P("No available sources yet", cls="text-gray-500 text-center mt-4"),
-            id="sources-panel",
-            cls="w-full h-full"
-        )
+def format_sources(sources):
+    """Format sources for a specific message"""
 
-    msg = messages[msg_idx]
-    data = msg.get('content') if is_tool else []
-
-    return Div(
-        Div(
-            Button(
-                "Medical Experts",
-                cls="px-4 py-2 font-medium rounded-t-lg focus:outline-none",
-                id="tab-doctors",
-                hx_get=f"/sources/{msg_idx}/doctors",
-                hx_target="#tab-content",
-                _="on click add bg-white text-blue-600 remove bg-gray-100 text-gray-600 to me "
-                   "add bg-gray-100 text-gray-600 remove bg-white text-blue-600 to #tab-knowledge"
-            ),
-            Button(
-                "Knowledge Base",
-                cls="px-4 py-2 font-medium rounded-t-lg focus:outline-none",
-                id="tab-knowledge",
-                hx_get=f"/sources/{msg_idx}/knowledge",
-                hx_target="#tab-content",
-                _="on click add bg-white text-blue-600 remove bg-gray-100 text-gray-600 to me "
-                   "add bg-gray-100 text-gray-600 remove bg-white text-blue-600 to #tab-doctors"
-            ),
-            cls="flex space-x-1 border-b border-gray-200"
-        ),
-        Div(
-            id="tab-content",
-            cls="p-4 bg-white flex-grow overflow-y-auto"
-        ),
-        id="sources-panel",
-        cls="flex flex-col h-full"
-    )
+    formatted_sources = []
 
 
-def format_source(source, source_type):
-    """Format a single source item for display"""
-    if source_type == "knowledge_base":
-        return Div(
-            Div(
-                H3(source["title"], 
-                   cls="text-lg font-semibold text-gray-800"),
-                P(source["content_preview"], 
-                  cls="mt-2 text-sm text-gray-600 line-clamp-2"),  # Limit preview text
+    for source in json.loads(sources):
+        if 'doctor_name' in source:  # Doctor source
+            formatted_sources.append(
                 Div(
-                    A("Read more", 
-                      href=source["source_link"], 
-                      cls="text-blue-600 hover:text-blue-700 hover:underline text-sm"),
-                    P(f"Relevance: {source.get('relevance_score', 'N/A')}", 
-                      cls="text-sm text-gray-500"),
-                    cls="flex justify-between items-center mt-3"
-                ),
-                cls="p-6 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200"
-            ),
-            cls="mb-4 last:mb-0"
-        )
-    else:  # doctors
-        return Div(
-            Div(
-                Div(
-                    H3(source["doctor_name"], 
-                       cls="text-lg font-semibold text-gray-800"),
-                    P(source["specialization"], 
-                      cls="text-sm text-blue-600 font-medium"),
-                    cls="mb-3"
-                ),
-                P(source["description"], 
-                  cls="text-sm text-gray-600 line-clamp-3"),  # Limit description text
-                Div(
-                    P(source["availability_status"],
-                      cls="px-3 py-1 rounded-full text-sm font-medium " + 
-                          ("bg-green-100 text-green-800" if source["availability_status"] == "Available"
-                           else "bg-red-100 text-red-800")),
-                    P(f"Relevance: {source.get('relevance_score', 'N/A')}", 
-                      cls="text-sm text-gray-500"),
-                    cls="flex justify-between items-center mt-4"
-                ),
-                A("Book Appointment",
-                  href=source["appointment_link"],
-                  cls="mt-4 inline-block px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 text-sm font-medium"),
-                cls="p-6 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200"
-            ),
-            cls="mb-4 last:mb-0"
-        )
-
-def Sources():
-    """Render sources panel with enhanced tab handling"""
-    return Div(
-        # Tab buttons with improved state handling
-        Div(
-            Button("Knowledge Base",
-                  id="kb-tab",
-                  cls="tab-button px-4 py-2 text-sm font-medium active text-blue-600 border-b-2 border-blue-600",
-                  hx_get="/sources-content?tab=knowledge",
-                  hx_target="#tab-content",
-                  onclick="handleTabClick(event)"),
-            Button("Available Doctors",
-                  id="doctors-tab",
-                  cls="tab-button px-4 py-2 text-sm font-medium text-gray-500",
-                  hx_get="/sources-content?tab=doctors",
-                  hx_target="#tab-content",
-                  onclick="handleTabClick(event)"),
-            cls="flex space-x-1 border-b border-gray-200 bg-white"
-        ),
-        # Content area
-        Div(id="tab-content",
-            cls="bg-white p-4 flex-grow overflow-y-auto"),
-        cls="h-full flex flex-col"
-    )
-
-@app.get("/message-content/{msg_idx}")
-def get_message_content(msg_idx: int):
-    """Route for getting updated message content"""
-    if msg_idx >= len(messages):
-        return ""
-    
-    msg = messages[msg_idx]
-    if not msg.get('generating', False):
-        # Return final message with markdown rendering trigger
-        rendered = ChatMessage(msg_idx)
-        return (
-            rendered,
-            Script(f"""
-                const content = document.querySelector('#content-{msg_idx}');
-                if (content && content.dataset.markdown) {{
-                    content.innerHTML = marked.parse(content.textContent);
-                }}
-            """)
-        )
-    
-    return ChatMessage(msg_idx)
-
-@app.get("/sources/{msg_idx}/doctors")
-def get_doctor_sources(msg_idx: int):
-    if msg_idx >= len(messages):
-        return ""
-    
-    sources = messages[msg_idx].get('content', [])
-    doctor_sources = [s for s in sources if 'doctor_name' in s]
-    
-    return Div(
-        *(
-            Div(
-                H4(source['doctor_name'], cls="font-semibold text-lg"),
-                P(f"Specialization: {source['specialization']}", cls="text-gray-600"),
-                P(source['description'], cls="mt-1"),
-                A("Book Appointment",
-                  href=source['appointment_link'],
-                  cls="inline-block mt-2 text-blue-500 hover:text-blue-700"),
-                cls="mb-4 border-b border-gray-200 pb-4"
+                    H4(source['doctor_name'], cls="font-semibold text-lg"),
+                    P(f"Specialization: {source['specialization']}", cls="text-gray-600"),
+                    P(source['description'], cls="mt-1"),
+                    A("Book Appointment",
+                      href=source['appointment_link'],
+                      cls="inline-block mt-2 text-blue-500 hover:text-blue-700",
+                      target="_blank"),
+                    cls="mb-4 border-b border-gray-200 pb-4"
+                )
             )
-            for source in doctor_sources
-        ) if doctor_sources else P("No medical experts found", cls="text-gray-500 text-center")
-    )
-
-@app.get("/sources/{msg_idx}/knowledge")
-def get_knowledge_sources(msg_idx: int):
-    if msg_idx >= len(messages):
-        return ""
-    
-    sources = messages[msg_idx].get('sources', [])
-    knowledge_sources = [s for s in sources if 'doctor_name' not in s]
-    
-    return Div(
-        *(
-            Div(
-                H4(source['title'], cls="font-semibold text-lg"),
-                P(source['content_preview'], cls="mt-1"),
-                A("Source Link",
-                  href=source['source_link'],
-                  cls="inline-block mt-2 text-blue-500 hover:text-blue-700"),
-                cls="mb-4 border-b border-gray-200 pb-4"
+        else:  # Knowledge base source
+            formatted_sources.append(
+                Div(
+                    H4(source['title'], cls="font-semibold text-lg"),
+                    P(source['content_preview'], cls="mt-1"),
+                    A("Source Link",
+                      href=source['source_link'],
+                      cls="inline-block mt-2 text-blue-500 hover:text-blue-700",
+                      target="_blank"),
+                    cls="mb-4 border-b border-gray-200 pb-4"
+                )
             )
-            for source in knowledge_sources
-        ) if knowledge_sources else P("No knowledge base entries found", cls="text-gray-500 text-center")
-    )
+    
+    return formatted_sources
 
-@app.get("/sources")
-def get_sources():
-    """Route for getting the entire sources panel"""
-    return Sources()
-
-@app.route("/")
+# Route handlers
+@rt("/")
 def get():
-    """Render the main page"""
-    app.hdrs += (Script(src="https://unpkg.com/hyperscript.org@0.9.12"),)
-    reset_messages()
-    page = Body(
+    """Main page handler"""
+    messages.clear()
+    
+    page = Main(
+        H1('AI Health Assistant', cls="text-3xl font-bold text-gray-800 mb-6 px-4"),
+        # Split layout for chat and sources
+        Div(
+            # Chat section
             Div(
-                # Header section
-                Div(
-                    H1("Health Assistant", 
-                    cls="text-4xl font-bold text-gray-800"),
-                    P("Get instant answers to your health questions and find suitable healthcare providers", 
-                    cls="text-lg text-gray-600 mt-2"),
-                    cls="text-center mb-12"
-                ),
-                # Main content grid
-                Div(
-                    # Chat section
+                Div(id="chatlist", cls="h-[calc(100vh-220px)] overflow-y-auto px-4"),
+                Div(id="suggestions-container", cls="px-4"),
+                Form(
                     Div(
-                        Div(
-                            id="chat-container",
-                            cls="h-[70vh] overflow-y-auto px-6 py-8"
-                        ),
-                        Div(
-                            Form(
-                                Div(
-                                    ChatInput(),
-                                    Button("Send",
-                                        type="submit",
-                                        cls="absolute right-2 top-1/2 transform -translate-y-1/2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 font-medium"),
-                                    cls="relative"
-                                ),
-                                LoadingIndicator(),
-                                hx_post="/chat",
-                                hx_target="#chat-container",
-                                hx_swap="beforeend",
-                                hx_indicator="#loading-indicator",
-                                cls="mt-4"
-                            ),
-                            cls="px-6 py-4 bg-white border-t border-gray-200"
-                        ),
-                        cls="bg-gray-50 rounded-2xl shadow-lg overflow-hidden"
+                        ChatInput(),
+                        Button("Send", type="submit",
+                              cls="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"),
+                        cls="flex space-x-4 items-center"
                     ),
-                    # Sources section with fixed height
-                    Div(Sources(), 
-                        cls="ml-8 h-[70vh] sources-container",
-                        id="sources-container",
-                        hx_get="/sources",
-                        hx_trigger="every 2s",
-                        hx_swap="outerHTML"),
-                    cls="grid grid-cols-2 gap-8 max-w-7xl mx-auto px-4"
+                    id="chat-form",
+                    ws_send=True,
+                    hx_ext="ws",
+                    ws_connect="/ws",
+                    cls="mt-4 px-4"
                 ),
-                cls="container mx-auto px-4 py-8"
+                cls="flex-1"
             ),
-            cls="min-h-screen bg-gradient-to-b from-blue-50 via-white to-blue-50"
-        )
-    
-    # Add styles for tabs and scrolling
-    styles = Style("""
-        .tab-button {
-            transition: all 0.2s;
-            position: relative;
-        }
-        
-        .tab-button.active {
-            color: rgb(37, 99, 235);
-            border-bottom: 2px solid rgb(37, 99, 235);
-        }
-        
-        .tab-button:not(.active):hover {
-            background-color: rgb(249, 250, 251);
-        }
-        
-        /* Markdown content styles */
-        [data-markdown="true"] {
-            overflow-wrap: break-word;
-        }
-        
-        [data-markdown="true"] pre {
-            background-color: rgb(243, 244, 246);
-            padding: 1rem;
-            border-radius: 0.375rem;
-            margin: 1rem 0;
-        }
-        
-        [data-markdown="true"] code {
-            background-color: rgb(243, 244, 246);
-            padding: 0.2rem 0.4rem;
-            border-radius: 0.25rem;
-        }
-    """)
-        
-    return Title("Health Assistant"), styles, page
+            # Sources panel
+            Div(
+                H2("Sources", cls="text-xl font-semibold mb-4"),
+                Div(
+                    id="sources-panel",
+                    cls="overflow-y-auto"
+                ),
+                cls="w-96 bg-gray-50 border-l border-gray-200 p-4"
+            ),
+            cls="flex max-w-7xl mx-auto"
+        ),
+        cls="bg-gray-50 min-h-screen"
+        # Add JavaScript for source updates
+    )
+    return Title('AI Health Assistant'), page
 
-@app.post("/chat")
-def post(msg: str = ""):
-    """Handle chat form submission"""
-    if not msg.strip():
+
+@rt("/chat")
+def post(text: str = ""):
+    """Handle chat submission"""
+    if not text.strip():
         return ""
-    
+
     # Add user message
     user_msg_idx = len(messages)
-    messages.append({"role": "user", "content": msg.strip()})
-    user_message = ChatMessage(user_msg_idx)
+    messages.append({"role": "user", "content": text.strip()})
     
     # Add initial assistant message
     assistant_msg_idx = len(messages)
     messages.append({"role": "assistant", "content": "", "generating": True})
-    assistant_message = ChatMessage(assistant_msg_idx)
     
-    # Start processing in background
-    messages_history = [{"content": m["content"], "role": m["role"]} 
-                       for m in messages[:-1]]
-    Thread(target=process_response, 
-           args=(messages_history, assistant_msg_idx)).start()
+    # Process in background
+    Thread(target=process_response, args=(messages, assistant_msg_idx), daemon=True).start()
     
     return (
-        Div(user_message, Script(f"""
-            const content = document.querySelector('#content-{user_msg_idx}');
-            if (content && content.dataset.markdown) {{
-                content.innerHTML = marked.parse(content.textContent);
-            }}
-        """)),
-        assistant_message,
-        ChatInput(),
-        Script("""
-            const container = document.getElementById('chat-container');
-            if (container) {
-                container.scrollTop = container.scrollHeight;
-            }
-        """)
+        ChatMessage(user_msg_idx),
+        ChatMessage(assistant_msg_idx),
+        ChatInput()
     )
 
-def process_response(messages_history, idx):
+async def get_next_questions(last_message: str):
+    """Based on the last message get suggestions for follow up questions."""
     try:
-        response = client.chat.completions.create(
+        prompt = {
+            "role": "user",
+            "content": f"""Based on this health-related response: "{last_message}"
+            Suggest 2 natural follow-up questions that a patient might want to ask.
+            These should be within 4 four words.
+            Return ONLY the questions in a Python list format like this: ["question 1", "question 2"]
+            The questions should be clear and concise."""
+        }
+        response = await async_client.chat.completions.create(
+            model="grok-2-1212",
+            messages=[prompt],
+            temperature=0.7
+        )
+
+        suggestions_text = response.choices[0].message.content
+        import ast
+        try:
+            suggestions = ast.literal_eval(suggestions_text)
+            if isinstance(suggestions, list) and len(suggestions) > 0:
+                return suggestions[:2]  # Ensure we only get 2 questions
+        except:
+            pass
+
+        return ["Could you explain more about that?",
+                "Summarize this"]
+    except Exception as e:
+        print(f"Error generating suggestions: {e}")
+        return ["Could you explain more about that?",
+                "Summarize this"]
+
+def format_suggestions(suggestions):
+    """Format suggestion buttons as websocket-connected forms"""
+    return Div(
+        Div(
+            *(Form(
+                Button(
+                    suggestion,
+                    type="submit",
+                    cls="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-full transition-colors duration-200"
+                ),
+                Hidden(suggestion, name="msg"),  # Hidden input with the suggestion text
+                hx_ext="ws",  # Enable websocket
+                ws_send=True,  # Connect to websocket
+                ws_connect="/ws",
+                cls="inline-block"  # Keep forms inline
+              ) for suggestion in suggestions),
+            cls="flex flex-wrap gap-2 justify-center mt-2 mb-4"
+        ),
+        id="suggestions-container",
+        hx_swap_oob="innerHTML"
+    )
+
+async def process_tool_call(tool_call):
+    """Process tool calls from the AI"""
+    fn_name = tool_call.function.name
+    fn_args = json.loads(tool_call.function.arguments)
+
+    print(f"Processing tool {fn_name} with args: {fn_args}")
+    
+    result = tool_maps[fn_name](**fn_args)
+ 
+    messages.append({
+        "role": "tool",
+        "content": json.dumps(result),
+        "tool_name": fn_name,
+        "tool_call_id": tool_call.id
+    })
+
+@app.ws('/ws')
+async def ws(msg: str, send):
+    """Web socket handler to stream the AI response."""
+    
+    # Add user message
+    messages.append({
+        "role": "user",
+        "content": msg.strip()
+    })
+    user_msg_idx = len(messages) - 1
+
+    # Send user message to chat
+    await send(Div(
+        ChatMessage(user_msg_idx),
+        hx_swap_oob="beforeend",
+        id="chatlist"
+    ))
+
+    # Reset chat input
+    await send(ChatInput())
+
+    try:
+        # First, call tools if needed
+        response = await async_client.chat.completions.create(
             model="grok-2-1212",
             messages=messages,
             tools=tools_definition,
@@ -513,38 +303,97 @@ def process_response(messages_history, idx):
             stream=True
         )
 
-        for chunk in response:
+        # Add initial assistant message
+        messages.append({
+            "role": "assistant",
+            "content": ""
+        })
+        assistant_msg_idx = len(messages) - 1
 
+        # Show initial loading state
+        await send(Div(
+            ChatMessage(assistant_msg_idx),
+            hx_swap_oob="beforeend",
+            id="chatlist"
+        ))
+
+        async for chunk in response:
             if chunk.choices[0].delta.content is not None:
-                messages[idx]['message'] += chunk.choices[0].delta.content 
-                print(chunk.choices[0].delta.content, end="", flush=True)
-
+                messages[assistant_msg_idx]['content'] += chunk.choices[0].delta.content
+                # Update the current message
+                await send(Div(
+                    ChatMessage(assistant_msg_idx),
+                    hx_swap_oob="outerHTML",
+                    id=f"chat-message-{assistant_msg_idx}"
+                ))
 
             if chunk.choices[0].delta.tool_calls:
-                print("\n")
-                
                 for tool_call in chunk.choices[0].delta.tool_calls:
-                    fn_call_in_progress = True
-                    fn_name = tool_call.function.name
-                    fn_args = json.loads(chunk.choices[0].delta.tool_calls[0].function.arguments)
+                    await process_tool_call(tool_call)
 
+                    if messages[-1]['role'] == 'tool':
+                        formatted_sources = format_sources(messages[-1]['content'])
+                        await send(Div(
+                            *formatted_sources,
+                            id="sources-panel",
+                            hx_swap_oob="innerHTML"
+                        ))
 
-                    result = tools_map[fn_name](**fn_args)
-
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "content": json.dumps(result),
-                            "tool_name": fn_name,
-                            "tool_call_id": tool_call.id  # tool_call.id supplied in Grok's response
-                        }
-                    )
-
+        # If last message was a tool response, get another completion
         if messages[-1]['role'] == 'tool':
-            messages.append({"role": "assistant", "content": "", "generating": True})
-            response = client.chat.completions.create(
+            messages.append({
+                "role": "assistant",
+                "content": ""
+            })
+            assistant_msg_idx = len(messages) - 1
+
+            # Show loading state for new message
+            await send(Div(
+                ChatMessage(assistant_msg_idx),
+                hx_swap_oob="beforeend",
+                id="chatlist"
+            ))
+
+            response = await async_client.chat.completions.create(
                 model="grok-2-1212",
-                messages=messages,
+                messages=messages[:-1],  # Exclude empty assistant message
+                tools=tools_definition,
+                tool_choice="auto",
+                stream=True
+            )
+
+            async for chunk in response:
+                if chunk.choices[0].delta.content is not None:
+                    messages[assistant_msg_idx]['content'] += chunk.choices[0].delta.content
+                    await send(Div(
+                        ChatMessage(assistant_msg_idx),
+                        hx_swap_oob="outerHTML",
+                        id=f"chat-message-{assistant_msg_idx}"
+                    ))
+
+        # Generate and send suggestions after completion
+        suggestions = await get_next_questions(messages[-1]['content'])
+        await send(format_suggestions(suggestions))
+
+    except Exception as e:
+        # Add error message
+        messages.append({
+            "role": "assistant",
+            "content": f"I apologize, but I encountered an error: {str(e)}"
+        })
+        await send(Div(
+            ChatMessage(len(messages)-1),
+            hx_swap_oob="beforeend",
+            id="chatlist"
+        ))
+
+def process_response(messages, idx):
+    """Process AI response in background"""
+    try:
+        while True:
+            response = client.chat.completions.create(
+                model="grok-2-1212",  # Replace with your model
+                messages=messages[:-1],
                 tools=tools_definition,
                 tool_choice="auto",
                 stream=True
@@ -552,15 +401,33 @@ def process_response(messages_history, idx):
 
             for chunk in response:
                 if chunk.choices[0].delta.content is not None:
-                    messages[-1]['content'] += chunk.choices[0].delta.content
-                    print(chunk.choices[0].delta.content, end="", flush=True)  
+                    messages[idx]['content'] += chunk.choices[0].delta.content
+
+                if chunk.choices[0].delta.tool_calls:
+                    for tool_call in chunk.choices[0].delta.tool_calls:
+                        process_tool_call(tool_call)
+                        idx += 1
+
+            # Handle tool response if needed
+            if messages[idx]['role'] == 'tool':
+                messages.append({"role": "assistant", "content": "", "generating": True})
+                idx += 1
+                
+                response = client.chat.completions.create(
+                    model="grok-2-1212",  # Replace with your model
+                    messages=messages[:-1],
+                    tools=tools_definition,
+                    tool_choice="auto",
+                    stream=True
+                )
+
+                for chunk in response:
+                    if chunk.choices[0].delta.content is not None:
+                        messages[idx]['content'] += chunk.choices[0].delta.content
     except Exception as e:
-        print(f"Error in process_response: {str(e)}")
-        messages[idx]['content'] = "I apologize, but I encountered an error while processing your request. Please try again."
+        messages[idx]['content'] = f"I apologize, but I encountered an error: {str(e)}"
     finally:
         messages[idx]['generating'] = False
 
-# Rest of the code remains the same...
-
 if __name__ == "__main__":
-    serve(app, host="0.0.0.0", port=5001, reload=True)
+    serve(app, host="0.0.0.0", port=5001)
